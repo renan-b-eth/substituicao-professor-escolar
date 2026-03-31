@@ -1,9 +1,14 @@
 import app from './config/app';
 
+// Vercel serverless - detecta automaticamente a porta
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, () => {
-  console.log(`
+// Para desenvolvimento local
+const isLocal = process.env.NODE_ENV !== 'production';
+
+if (isLocal) {
+  app.listen(PORT, () => {
+    console.log(`
 ╔══════════════════════════════════════════════════════════════╗
 ║                                                              ║
 ║   🏫 Servidor - Substituição de Professores                ║
@@ -13,7 +18,9 @@ app.listen(PORT, () => {
 ║   ❤️  Health Check: http://localhost:${PORT}/health          ║
 ║                                                              ║
 ╚══════════════════════════════════════════════════════════════╝
-  `);
-});
+    `);
+  });
+}
 
+// Export para Vercel Serverless Functions
 export default app;
