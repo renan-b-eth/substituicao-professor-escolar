@@ -1,0 +1,328 @@
+// ============================================================================
+// SCHEMA DO BANCO DE DADOS - Multi-Tenant
+//Todas as tabelas principais têm school_id para isolamento de dados
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// ESCOLA (Tenant)
+// ============================================================================
+model School {
+  id          String   @id @default(uuid())
+  name        String
+  cnpj        String?  @unique
+  inepCode    String?  @unique // Código INEP da escola
+  address     String?
+  phone       String?
+  email       String?
+  director    String?  // Nome do diretor(a)
+  active      Boolean  @default(true)
+  
+  // Timestamps
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // --- RELAÇÕES ---
+  users       User[]
+  teachers    Teacher[]
+  schedules   Schedule[]
+  substitutions Substitution[]
+  notifications Notification[]
+  
+  @@index([active])
+  @@map("schools")
+}
+
+// ============================================================================
+// USUÁRIOS (RBAC)
+// ============================================================================
+enum UserRole {
+  SUPER_ADMIN  // Gerencia todas as escolas
+  SECRETARY    // Importa planilhas
+  INSPECTOR    // Painel operacional diário
+  GOE          // Validação e registros oficiais
+}
+
+model User {
+  id          String   @id @default(uuid())
+  email       String
+  password    String   // Hash bcrypt
+  name        String
+  role        UserRole
+  active      Boolean  @default(true)
+  
+  // Relacionamento com Escola (obrigatório para todos exceto SUPER_ADMIN)
+  schoolId    String?
+  school      School?  @relation(fields: [schoolId], references: [id])
+  
+  // Timestamps
+  lastLogin   DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // --- RELAÇÕES ---
+  notifications Notification[]
+
+  @@unique([email, schoolId]) // Email único por escola
+  @@index([role])
+  @@index([schoolId])
+  @@map("users")
+}
+
+// ============================================================================
+// PROFESSOR
+// ============================================================================
+enum TeacherStatus {
+  ACTIVE
+  INACTIVE
+  ON_LEAVE  // Em licença
+  SUBSTITUTE // Professor substituto
+}
+
+model Teacher {
+  id          String   @id @default(uuid())
+  name        String
+  cpf         String?  @unique
+  rg          String?
+  email       String?
+  phone       String?
+  discipline  String?  // Matéria que leciona
+  status      TeacherStatus @default(ACTIVE)
+  
+  // Relacionamento com Escola
+  schoolId    String
+  school      School   @relation(fields: [schoolId], references: [id])
+  
+  // Timestamps
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // --- RELAÇÕES ---
+  originalClasses   Schedule[] @relation("OriginalTeacher") // Aulas originais do professor
+  substituteClasses Schedule[] @relation("SubstituteTeacher") // Aulas onde é substituto
+  substitutions     Substitution[] @relation("OriginalTeacher") // Faltas registradas
+  substitutionsDone Substitution[] @relation("SubstituteTeacher") // Substituições realizadas
+
+  @@index([schoolId])
+  @@index([status])
+  @@map("teachers")
+}
+
+// ============================================================================
+// GRADE DE AULAS / HORÁRIO
+// ============================================================================
+enum DayOfWeek {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+}
+
+enum Period {
+  MORNING     // Manhã
+  AFTERNOON   // Tarde
+  EVENING     // Noite
+}
+
+model Schedule {
+  id          String   @id @default(uuid())
+  
+  // Identificação da aula
+  dayOfWeek   DayOfWeek
+  period      Period
+  startTime   String   // Horário de início (ex: "07:30")
+  endTime     String   // Horário de término (ex: "08:20")
+  
+  // Turma e disciplina
+  className   String   // Nome da turma (ex: "9º Ano A")
+  discipline  String   // Disciplina
+  
+  // Professores (relações)
+  schoolId    String
+  school      School   @relation(fields: [schoolId], references: [id])
+  
+  originalTeacherId String?  // Professor titular
+  originalTeacher   Teacher? @relation("OriginalTeacher", fields: [originalTeacherId], references: [id])
+  
+  substituteTeacherId String? // Professor substituto (quando há substituição)
+  substituteTeacher   Teacher? @relation("SubstituteTeacher", fields: [substituteTeacherId], references: [id])
+  
+  // Status da substituição nesta aula
+  hasSubstitution Boolean @default(false)
+  
+  // Timestamps
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([schoolId, dayOfWeek, period, className, startTime]) // Uma aula por combinação
+  @@index([schoolId])
+  @@index([originalTeacherId])
+  @@index([dayOfWeek])
+  @@map("schedules")
+}
+
+// ============================================================================
+// SUBSTITUIÇÃO (Fluxo Principal)
+// ============================================================================
+enum SubstitutionStatus {
+  DRAFT           // Rascunho - ainda não confirmou
+  PENDING_GOE     // Aguardando GOE para validação
+  REGISTERED      // GOE registrou no sistema oficial
+  COMPLETED       // Substituição concluída
+  CANCELLED       // Substituição cancelada
+}
+
+enum SubstitutionReason {
+  SICK            // Licença médica
+  PERSONAL_LEAVE  // Licença pessoal
+  TRAINING       // Capacitação
+  OTHER          // Outro motivo
+}
+
+model Substitution {
+  id          String   @id @default(uuid())
+  
+  // Referência à aula
+  scheduleId  String
+  schedule    Schedule @relation(fields: [scheduleId], references: [id])
+  
+  // Escola (para consultas rápidas)
+  schoolId    String
+  school      School   @relation(fields: [schoolId], references: [id])
+  
+  // Professores
+  originalTeacherId String // Professor que faltou
+  originalTeacher   Teacher @relation("OriginalTeacher", fields: [originalTeacherId], references: [id])
+  
+  substituteTeacherId String // Professor substituto
+  substituteTeacher   Teacher @relation("SubstituteTeacher", fields: [substituteTeacherId], references: [id])
+  
+  // Dados da substituição
+  date        DateTime @db.Date // Data da falta
+  reason      SubstitutionReason
+  notes       String?  // Observações
+  
+  // Confirmação de legitimidade (PASSO 1)
+  legitimacyConfirmed Boolean @default(false)
+  legitimacyConfirmedAt DateTime?
+  legitimacyConfirmedBy String? // User ID que confirmou
+  
+  // Status e fluxo (PASSOS 2, 3, 4)
+  status      SubstitutionStatus @default(DRAFT)
+  
+  // Registro GOE (PASSO 3)
+  goeRegisteredAt    DateTime?
+  goeRegisteredBy    String? // User ID da GOE que registrou
+  officialRegisterId String? // ID no sistema oficial do estado
+  
+  // Timestamps
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([schoolId])
+  @@index([date])
+  @@index([status])
+  @@index([originalTeacherId])
+  @@index([substituteTeacherId])
+  @@map("substitutions")
+}
+
+// ============================================================================
+// NOTIFICAÇÕES (Sistema In-App)
+// ============================================================================
+enum NotificationType {
+  SUBSTITUTION_REQUESTED   // Inspetoria solicitou substituição
+  SUBSTITUTION_REGISTERED  // GOE registrou a substituição
+  SUBSTITUTION_COMPLETED   // Substituição concluída
+  SUBSTITUTION_CANCELLED   // Substituição cancelada
+  GENERAL                  // Notificação geral
+}
+
+enum NotificationPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model Notification {
+  id          String   @id @default(uuid())
+  
+  // Conteúdo
+  title       String
+  message     String
+  type        NotificationType
+  priority    NotificationPriority @default(MEDIUM)
+  
+  // Destinatário
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  
+  // Referência opcional (substituição relacionada)
+  substitutionId String?
+  substitution    Substitution? @relation(fields: [substitutionId], references: [id])
+  
+  // Escola (para isolamento)
+  schoolId    String
+  school      School   @relation(fields: [schoolId], references: [id])
+  
+  // Status
+  read        Boolean  @default(false)
+  readAt      DateTime?
+  
+  // Timestamps
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([schoolId])
+  @@index([read])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+// ============================================================================
+// LOG DE AUDITORIA (Histórico de alterações)
+// ============================================================================
+model AuditLog {
+  id          String   @id @default(uuid())
+  
+  // Ação
+  action      String   // CREATE, UPDATE, DELETE, etc.
+  entity      String   // Nome da entidade (ex: "Substitution")
+  entityId    String   // ID do registro alterado
+  
+  // Dados antigos e novos
+  oldData     Json?
+  newData     Json?
+  
+  // Usuário responsável
+  userId      String?
+  userName    String?
+  
+  // Escola (para isolamento)
+  schoolId    String?
+  
+  // IP e User Agent
+  ipAddress   String?
+  userAgent   String?
+  
+  // Timestamp
+  createdAt   DateTime @default(now())
+
+  @@index([entity])
+  @@index([entityId])
+  @@index([userId])
+  @@index([schoolId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
