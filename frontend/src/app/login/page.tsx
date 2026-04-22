@@ -3,30 +3,51 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { GraduationCap, Mail, Lock, Eye, EyeOff, AlertCircle } from 'lucide-react';
+import { useAuth, API_URL } from '../../lib/auth';
+import axios from 'axios';
 
 export default function LoginPage() {
   const router = useRouter();
+  const { login } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setLoading(true);
 
-    // Simular delay de rede
-    setTimeout(() => {
-      if (email === 'adm@adm.com' && password === '123456') {
-        // Login bem-sucedido - redirecionar para dashboard
-        router.push('/dashboard');
-      } else {
-        setError('Credenciais inválidas. Tente adm@adm.com / 123456');
+    try {
+      const response = await axios.post(`${API_URL}/auth/login`, { email, password });
+      if (response.data.success) {
+        const { token, user } = response.data.data;
+        localStorage.setItem('token', token);
+        localStorage.setItem('user', JSON.stringify(user));
+        
+        // Redirect based on role
+        switch (user.role) {
+          case 'INSPECTOR':
+            router.push('/dashboard');
+            break;
+          case 'GOE':
+            router.push('/dashboard/goe');
+            break;
+          case 'DIRECTOR':
+          case 'COORDINATOR':
+            router.push('/dashboard/relatorios');
+            break;
+          default:
+            router.push('/dashboard');
+        }
       }
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Credenciais inválidas');
+    } finally {
       setLoading(false);
-    }, 1000);
+    }
   };
 
   return (
@@ -131,7 +152,10 @@ export default function LoginPage() {
             {/* Demo Hint */}
             <div className="text-center p-3 bg-slate-50 rounded-lg">
               <p className="text-xs text-slate-500">
-                Demo: <span className="font-mono text-slate-700">adm@adm.com</span> / <span className="font-mono text-slate-700">123456</span>
+                Demo: <span className="font-mono text-slate-700">inspetora@escola.edu</span> / <span className="font-mono text-slate-700">123456</span>
+              </p>
+              <p className="text-xs text-slate-400 mt-1">
+                Roles disponíveis: inspetora, goe, coordinadora, direta
               </p>
             </div>
           </form>

@@ -49,6 +49,8 @@ enum UserRole {
   SECRETARY    // Importa planilhas
   INSPECTOR    // Painel operacional diário
   GOE          // Validação e registros oficiais
+  DIRECTOR     // Diretor(a) da escola
+  COORDINATOR  // Coordenador(a) pedagógico
 }
 
 model User {
@@ -57,6 +59,7 @@ model User {
   password    String   // Hash bcrypt
   name        String
   role        UserRole
+  cpf         String?
   active      Boolean  @default(true)
   
   // Relacionamento com Escola (obrigatório para todos exceto SUPER_ADMIN)
